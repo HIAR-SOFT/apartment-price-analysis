@@ -1,16 +1,15 @@
 """
-parser.py  —  Visit each listing URL and extract all apartment details.
-Uses SeleniumBase UC mode to bypass Cloudflare on individual listing pages.
+parser.py  —  Extract full apartment details from sahibinden.com listing pages.
+Uses SeleniumBase UC mode to bypass Cloudflare.
 
-Install once:
+Install:
     pip install seleniumbase beautifulsoup4 lxml pandas
 
 Usage:
-    python scraper/parser.py --input data/raw/listing_links_YYYYMMDD_HHMM.json
     python scraper/parser.py --input data/raw/listing_links_YYYYMMDD_HHMM.json --limit 200
 """
 
-import json, argparse, time, random
+import re, json, argparse, time, random
 from pathlib import Path
 from datetime import datetime
 
@@ -23,41 +22,73 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 BASE = "https://www.sahibinden.com"
 
+# Exact Turkish labels from the page (lowercase) → English column name
 FIELD_MAP = {
-    "ilan no":                "listing_id",
-    "ilan tarihi":            "AdCreationDate",
-    "güncelleme tarihi":      "AdUpdateDate",
-    "fiyat":                  "price",
-    "net m²":                 "HallSquareMeters",
-    "brüt m²":                "GrossSquareMeters",
-    "oda sayısı":             "NumberOfRooms",
-    "bina yaşı":              "BuildingAge",
-    "bulunduğu kat":          "FloorLocation",
-    "kat sayısı":             "NumberFloorsofBuilding",
-    "banyo sayısı":           "NumberOfBathrooms",
-    "balkon":                 "Balcony",
-    "balkon sayısı":          "NumberOfBalconies",
-    "balkon tipi":            "BalconyType",
-    "balkon m²":              "BalconySquareMeters",
-    "wc m²":                  "WCSquareMeters",
-    "ısıtma":                 "HeatingType",
-    "mutfak":                 "KitchenType",
-    "eşya durumu":            "ItemStatus",
-    "asansör":                "Elevator",
-    "otopark":                "Parking",
-    "site içerisinde":        "InsideTheSite",
-    "kullanım durumu":        "UsingStatus",
-    "yapı tipi":              "StructureType",
-    "yapı durumu":            "BuildStatus",
-    "tapu durumu":            "TitleStatus",
-    "tapu tipi":              "TitleType",
-    "takas":                  "Swap",
-    "krediye uygun":          "CreditEligibility",
-    "yatırıma uygun":         "EligibilityForInvestment",
-    "ipotek durumu":          "MortgageStatus",
-    "kira getirisi":          "RentalIncome",
-    "aidat":                  "Subscription",
-    "video":                  "IsItVideoNavigable?",
+    # dates / id
+    "ilan tarihi":              "AdCreationDate",
+    "güncelleme tarihi":        "AdUpdateDate",
+    "ilan no":                  "listing_id",
+
+    # type
+    "emlak tipi":               "PropertyType",
+
+    # size
+    "m² (brüt)":               "GrossSquareMeters",
+    "m² (net)":                 "HallSquareMeters",
+    "brüt m²":                 "GrossSquareMeters",   # alias
+    "net m²":                  "HallSquareMeters",    # alias
+    "brüt alan":               "GrossSquareMeters",
+    "net alan":                "HallSquareMeters",
+
+    # rooms / floors
+    "oda sayısı":              "NumberOfRooms",
+    "oda":                     "NumberOfRooms",
+
+    # building
+    "bina yaşı":               "BuildingAge",
+    "bulunduğu kat":           "FloorLocation",
+    "kat sayısı":              "NumberFloorsofBuilding",
+    "bina kat sayısı":         "NumberFloorsofBuilding",
+
+    # features
+    "ısıtma":                  "HeatingType",
+    "isıtma":                  "HeatingType",         # alias without accent
+    "banyo sayısı":            "NumberOfBathrooms",
+    "banyo":                   "NumberOfBathrooms",
+    "mutfak":                  "KitchenType",
+    "balkon":                  "Balcony",
+    "asansör":                 "Elevator",
+    "otopark":                 "Parking",
+
+    # furnished / status
+    "eşyalı":                  "ItemStatus",
+    "eşya durumu":             "ItemStatus",
+    "kullanım durumu":         "UsingStatus",
+    "kimden":                  "FromWhom",
+
+    # site
+    "site içerisinde":         "InsideTheSite",
+    "site adı":                "SiteName",
+    "aidat (tl)":              "Subscription",
+    "aidat":                   "Subscription",
+
+    # legal / financial
+    "krediye uygun":           "CreditEligibility",
+    "enerji kimlik belgesi":   "EnergyRating",
+    "tapu durumu":             "TitleStatus",
+    "tapu tipi":               "TitleType",
+    "takas":                   "Swap",
+    "ipotek durumu":           "MortgageStatus",
+    "yatırıma uygun":          "EligibilityForInvestment",
+    "kira getirisi":           "RentalIncome",
+
+    # build
+    "yapı tipi":               "StructureType",
+    "yapı durumu":             "BuildStatus",
+
+    # misc
+    "video":                   "IsItVideoNavigable?",
+    "fiyat":                   "price",
 }
 
 
@@ -65,87 +96,183 @@ def make_driver() -> Driver:
     return Driver(uc=True, headed=True)
 
 
-def get_soup(driver: Driver, url: str) -> BeautifulSoup | None:
+def open_url(driver: Driver, url: str) -> bool:
     try:
-        driver.uc_open_with_reconnect(url, reconnect_time=5)
+        driver.uc_open_with_reconnect(url, reconnect_time=6)
         try:
             driver.uc_gui_click_captcha()
             time.sleep(2)
         except Exception:
             pass
-        time.sleep(random.uniform(2, 3.5))
-        return BeautifulSoup(driver.get_page_source(), "lxml")
+        time.sleep(random.uniform(2.5, 4.0))
+        return True
     except Exception as e:
         print(f"    [WARN] {e}")
-        return None
+        return False
 
 
-def is_blocked(soup: BeautifulSoup) -> bool:
-    text = soup.get_text().lower()
-    return any(kw in text for kw in ["just a moment", "checking your browser",
-                                      "bağlantınız kontrol", "verify you are human"])
+def is_blocked(html: str) -> bool:
+    low = html.lower()
+    return any(k in low for k in [
+        "just a moment", "checking your browser",
+        "bağlantınız kontrol", "verify you are human",
+        "enable javascript", "ray id"
+    ])
 
 
-def parse_listing(soup: BeautifulSoup, url: str, listing_type: str) -> dict:
+def extract_kv_pairs(soup: BeautifulSoup) -> dict:
+    """
+    Pull every key-value pair from the page using many strategies.
+    Returns dict of {lowercase_key: value}.
+    """
+    found = {}
+
+    def store(key: str, val: str):
+        key = key.strip().rstrip(":").strip().lower()
+        val = val.strip()
+        if key and val and len(key) < 80:
+            found.setdefault(key, val)
+
+    # any <li> that has exactly 2 <span> children
+    for li in soup.select("li"):
+        spans = li.find_all("span", recursive=False)
+        if len(spans) == 2:
+            store(spans[0].get_text(" ", strip=True),
+                  spans[1].get_text(" ", strip=True))
+        elif len(spans) >= 2:
+            store(spans[0].get_text(" ", strip=True),
+                  spans[1].get_text(" ", strip=True))
+
+    #  <li> with a <strong> or <b> label 
+    for li in soup.select("li"):
+        label_el = li.find(["strong", "b", "label"])
+        if label_el:
+            key = label_el.get_text(" ", strip=True)
+            label_el.decompose()
+            val = li.get_text(" ", strip=True)
+            store(key, val)
+
+    # table rows
+    for tr in soup.select("tr"):
+        cells = tr.find_all(["td", "th"])
+        if len(cells) >= 2:
+            store(cells[0].get_text(" ", strip=True),
+                  cells[1].get_text(" ", strip=True))
+
+    # definition lists
+    for dl in soup.select("dl"):
+        dts = dl.find_all("dt")
+        dds = dl.find_all("dd")
+        for dt, dd in zip(dts, dds):
+            store(dt.get_text(" ", strip=True), dd.get_text(" ", strip=True))
+
+    # Any element with datalabel attribute
+    for el in soup.select("[data-label]"):
+        store(el["data-label"], el.get_text(" ", strip=True))
+
+    # Divs with two direct children (label + value pattern) 
+    for div in soup.select("div[class*='detail'], div[class*='info'], "
+                           "div[class*='property'], div[class*='feature']"):
+        children = [c for c in div.children
+                    if hasattr(c, "get_text") and c.get_text(strip=True)]
+        if len(children) == 2:
+            store(children[0].get_text(" ", strip=True),
+                  children[1].get_text(" ", strip=True))
+
+    # JSON blobs in <script> tags 
+    for script in soup.find_all("script"):
+        txt = script.string or ""
+        if len(txt) < 50:
+            continue
+        # Look for "Label":"Value" patterns near apartment keywords
+        pairs = re.findall(r'"([^"]{2,60}?)"\s*:\s*"([^"]{1,120})"', txt)
+        for k, v in pairs:
+            kl = k.lower()
+            if any(tok in kl for tok in [
+                "oda", "kat", "m2", "m²", "yaş", "banyo", "ısıtma", "isitma",
+                "balkon", "asansör", "asansor", "otopark", "tapu", "yapı",
+                "kullanım", "site", "aidat", "fiyat", "emlak", "brüt", "net",
+                "eşya", "esya", "krediye", "takas", "kimden"
+            ]):
+                store(k, v)
+
+    return found
+
+
+def parse_listing(driver: Driver, url: str, listing_type: str) -> dict:
     record = {
         "listing_url":  url,
         "listing_type": listing_type,
         "scraped_at":   datetime.now().isoformat(),
     }
 
-    # ── Price ─────────────────────────────────────────────────────────────────
-    for sel in [".classifiedPrice strong", "div.price-container strong",
-                "span[class*='price']", "h3[class*='price']",
-                "[class*='price'] strong", "[class*='Price']"]:
+    if not open_url(driver, url):
+        return record
+
+    html = driver.get_page_source()
+    if is_blocked(html):
+        print("    → blocked — solve CAPTCHA in browser ...")
+        input("    Press ENTER when done... ")
+        html = driver.get_page_source()
+
+    soup = BeautifulSoup(html, "lxml")
+
+    # price 
+    for sel in [
+        ".classifiedPrice strong",
+        "[class*='price'] strong", "[class*='Price'] strong",
+        "[class*='fiyat']", "h3[class*='price']",
+        "span[class*='price']", "div[class*='price']",
+    ]:
         el = soup.select_one(sel)
-        if el and el.get_text(strip=True):
-            record["price"] = el.get_text(strip=True)
+        if el:
+            txt = el.get_text(" ", strip=True)
+            if txt and any(c.isdigit() for c in txt):
+                record["price"] = txt
+                break
+
+    # title
+    for sel in ["h1.classifiedDetailTitle", "h1[class*='title']",
+                "h1[class*='Title']", "h1"]:
+        el = soup.select_one(sel)
+        if el:
+            record["title"] = el.get_text(" ", strip=True)
             break
 
-    # ── Breadcrumb → location ─────────────────────────────────────────────────
-    crumbs = soup.select(".classifiedBreadCrumb a")
+    # location 
+    crumbs = soup.select(
+        ".classifiedBreadCrumb a, [class*='Breadcrumb'] a, "
+        "[class*='breadcrumb'] a, nav a"
+    )
+    crumbs = [c for c in crumbs if c.get_text(strip=True)]
     if len(crumbs) >= 2:
         record["district"]      = crumbs[-2].get_text(strip=True)
         record["neighbourhood"] = crumbs[-1].get_text(strip=True)
     if crumbs:
         record["address"] = ", ".join(c.get_text(strip=True) for c in crumbs[1:])
 
-    # ── Characteristics table ─────────────────────────────────────────────────
-    rows = soup.select(
-        "ul.classifiedInfoList li, "
-        "div.classified-properties li, "
-        "div[class*='classifiedInfo'] li, "
-        "table.classifiedInfoTable tr, "
-        "[class*='ClassifiedInfo'] li"
-    )
-    for row in rows:
-        spans = row.select("span")
-        if len(spans) >= 2:
-            key = spans[0].get_text(strip=True).lower().rstrip(": ")
-            val = spans[1].get_text(strip=True)
-        elif row.name == "tr":
-            cells = row.select("td")
-            if len(cells) >= 2:
-                key = cells[0].get_text(strip=True).lower().rstrip(": ")
-                val = cells[1].get_text(strip=True)
-            else:
-                continue
-        else:
-            continue
-        col = FIELD_MAP.get(key)
-        if col:
-            record[col] = val
+    # all key-value fields 
+    raw = extract_kv_pairs(soup)
 
-    # ── Date fallback ─────────────────────────────────────────────────────────
-    for li in soup.select("li.classifiedInfoItem, .classified-date-info li"):
-        spans = li.select("span")
-        if len(spans) >= 2:
-            key = spans[0].get_text(strip=True).lower()
-            val = spans[1].get_text(strip=True)
-            if "ilan tarihi" in key:
-                record.setdefault("AdCreationDate", val)
-            elif "güncelleme" in key:
-                record.setdefault("AdUpdateDate", val)
+    for raw_key, raw_val in raw.items():
+        col = FIELD_MAP.get(raw_key)
+        if col:
+            record.setdefault(col, raw_val)
+
+    # atore unrecognised fields with extra prefix 
+    mapped = set(FIELD_MAP.keys())
+    for raw_key, raw_val in raw.items():
+        if raw_key not in mapped:
+            safe = "extra_" + re.sub(r"[^\w]", "_", raw_key)[:40]
+            record.setdefault(safe, raw_val)
+
+    # Description 
+    for sel in [".classifiedDescription", "#classifiedDescription",
+                "[class*='description']", "[class*='Description']"]:
+        el = soup.select_one(sel)
+        if el:
+            record["description"] = el.get_text(" ", strip=True)[:600]
+            break
 
     return record
 
@@ -171,7 +298,7 @@ def main():
     if not path.exists():
         raw_dir = Path(__file__).parent.parent / "data" / "raw"
         print(f"[ERROR] File not found: {args.input}")
-        print("Files in data/raw/:")
+        print("JSON files in data/raw/:")
         for f in sorted(raw_dir.glob("*.json")):
             print(f"  {f.name}")
         return
@@ -184,13 +311,12 @@ def main():
         return
 
     links = links[:args.limit]
-    print(f"\nParsing {len(links)} listings with SeleniumBase UC mode ...")
-    print("Chrome will open. Cloudflare challenges will be handled automatically.\n")
+    print(f"\nParsing {len(links)} listings ...\n")
 
     driver  = make_driver()
     records = []
 
-    # Warm up on homepage first
+    
     print("Warming up on sahibinden.com ...")
     try:
         driver.uc_open_with_reconnect(BASE, reconnect_time=6)
@@ -206,35 +332,20 @@ def main():
         for i, item in enumerate(links, 1):
             url = item.get("listing_url", "")
             lt  = item.get("listing_type", "satilik")
-            print(f"  [{i:>3}/{len(links)}] {url[:75]}")
+            print(f"  [{i:>3}/{len(links)}] {url[:70]}")
 
-            soup = get_soup(driver, url)
-
-            if soup is None:
-                print("           → failed to load")
-                records.append({"listing_url": url, "listing_type": lt,
-                                 "scraped_at": datetime.now().isoformat()})
-                continue
-
-            if is_blocked(soup):
-                print("           → still blocked, waiting for manual solve ...")
-                input("           Solve CAPTCHA in the browser, then press ENTER... ")
-                soup = BeautifulSoup(driver.get_page_source(), "lxml")
-
-            rec = parse_listing(soup, url, lt)
+            rec   = parse_listing(driver, url, lt)
+            count = sum(1 for k, v in rec.items()
+                        if v and str(v).strip() not in ("nan", "None", ""))
+            print(f"           → {count} fields extracted")
             records.append(rec)
 
-            filled = sum(1 for v in rec.values() if v and str(v).strip()
-                         and str(v) not in ("nan", "None"))
-            print(f"           → {filled} fields extracted")
-
-            # Checkpoint every 50
             if i % 50 == 0:
                 ck = OUTPUT_DIR / f"checkpoint_{i}.csv"
                 pd.DataFrame(records).to_csv(ck, index=False, encoding="utf-8-sig")
                 print(f"    ✓ checkpoint → {ck.name}")
 
-            time.sleep(random.uniform(2.5, 4.5))
+            time.sleep(random.uniform(2.5, 5.0))
 
     finally:
         driver.quit()
@@ -244,10 +355,10 @@ def main():
     out   = OUTPUT_DIR / f"raw_listings_{stamp}.csv"
     df.to_csv(out, index=False, encoding="utf-8-sig")
 
-    print(f"\n✓  {len(df)} records saved  →  {out}")
-    print("\nFields extracted (non-null counts):")
+    print(f"\n✓  {len(df)} records  →  {out}")
+    print(f"\nColumns extracted ({len(df.columns)} total):")
     non_empty = df.notna().sum()
-    print(non_empty[non_empty > 0].to_string())
+    print(non_empty[non_empty > 0].sort_values(ascending=False).to_string())
     print(f'\nNext:  python scraper/cleaning.py --input "{out}"')
 
 

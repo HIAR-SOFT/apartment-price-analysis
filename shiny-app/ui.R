@@ -1,33 +1,32 @@
-# ============================================================
+
 # shiny-app/ui.R
-# Istanbul Real Estate Price Estimator — User Interface
-# ============================================================
+
 
 library(shiny)
 library(shinydashboard)
 library(plotly)
 library(DT)
 
-# ── District choices (populated from data at runtime in server) ─
-# This is a placeholder; real choices come from the dataset
+#  District choices (populated from data at runtime in server) 
+# This is a placeholder real choices come from the dataset
 
 ui <- dashboardPage(
   skin = "blue",
 
-  # ── Header ─────────────────────────────────────────────────
+  # Header
   dashboardHeader(title = "🏙️ Istanbul Real Estate"),
 
-  # ── Sidebar ─────────────────────────────────────────────────
+  # sidebar      
   dashboardSidebar(
     sidebarMenu(
-      menuItem("💰 Price Estimator",  tabName = "estimator",  icon = icon("calculator")),
-      menuItem("📊 Market Statistics", tabName = "statistics", icon = icon("chart-bar")),
-      menuItem("🗺️ District Explorer", tabName = "districts",  icon = icon("map")),
-      menuItem("📈 Model Info",        tabName = "models",     icon = icon("brain"))
+      menuItem("Price Estimator",  tabName = "estimator",  icon = icon("calculator")),
+      menuItem("Market Statistics", tabName = "statistics", icon = icon("chart-bar")),
+      menuItem("District Explorer", tabName = "districts",  icon = icon("map")),
+      menuItem(" Model Info",        tabName = "models",     icon = icon("brain"))
     )
   ),
 
-  # ── Body ─────────────────────────────────────────────────────
+  #  Body 
   dashboardBody(
     # Custom CSS
     tags$head(tags$style(HTML("
@@ -51,7 +50,7 @@ ui <- dashboardPage(
 
     tabItems(
 
-      # ── TAB 1: Price Estimator ──────────────────────────────
+      #TAB  Price Estimator
       tabItem(tabName = "estimator",
         fluidRow(
           # Input panel
@@ -137,7 +136,7 @@ ui <- dashboardPage(
         )
       ),
 
-      # ── TAB 2: Market Statistics ────────────────────────────
+      #TAB Market Statistics
       tabItem(tabName = "statistics",
         fluidRow(
           box(width = 12, title = "Price Distribution", status = "primary",
@@ -159,7 +158,7 @@ ui <- dashboardPage(
         )
       ),
 
-      # ── TAB 3: District Explorer ─────────────────────────────
+      # District Explorer
       tabItem(tabName = "districts",
         fluidRow(
           box(width = 12, title = "Average Price by District",
@@ -174,7 +173,7 @@ ui <- dashboardPage(
         )
       ),
 
-      # ── TAB 4: Model Info ────────────────────────────────────
+      #TAB Model Info 
       tabItem(tabName = "models",
         fluidRow(
           box(width = 12, title = "Model Comparison",

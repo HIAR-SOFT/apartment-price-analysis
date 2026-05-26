@@ -1,60 +1,39 @@
-# ============================================================
 # 01_data_loading.R
-# Loads cleaned CSV (column names match PREPROCESS_FULL.ipynb)
-# into R, sets correct types, saves .rds files.
-# ============================================================
+
 
 library(readr)
 library(dplyr)
-library(lubridate)
 library(here)
 
-# ── 1. Find the most recent cleaned CSV ──────────────────────
+# Find most recent cleaned CSV
 cleaned_dir <- here("data", "cleaned")
-csv_files   <- list.files(cleaned_dir, pattern = "cleaned_listings.*\\.csv$", full.names = TRUE)
+csv_files   <- list.files(cleaned_dir,
+                          pattern = "cleaned_listings.*\\.csv$",
+                          full.names = TRUE)
 
 if (length(csv_files) == 0) {
   stop(
-    "No cleaned CSV found in data/cleaned/\n",
-    "Run:  python scraper/scraper.py\n",
-    "Then: python scraper/parser.py --input data/raw/listing_links_XXX.json\n",
-    "Then: python scraper/cleaning.py --input data/raw/raw_listings_XXX.csv"
+    "No cleaned CSV in data/cleaned/\n",
+    "Run:\n",
+    "  python scraper/scraper.py\n",
+    "  python scraper/parser.py  --input data/raw/listing_links_XXX.json\n",
+    "  python scraper/cleaning.py --input data/raw/raw_listings_XXX.csv\n"
   )
 }
 
-csv_file <- csv_files[length(csv_files)]   # most recent
+csv_file <- csv_files[length(csv_files)]
 cat("Loading:", csv_file, "\n")
 
-# ── 2. Read ───────────────────────────────────────────────────
-df <- read_csv(csv_file, locale = locale(encoding = "UTF-8"), show_col_types = FALSE)
-cat("Shape:", nrow(df), "x", ncol(df), "\n")
-cat("Columns:", paste(names(df), collapse = ", "), "\n\n")
+#  Read 
+df <- read_csv(csv_file,
+               locale         = locale(encoding = "UTF-8"),
+               show_col_types = FALSE)
 
-# ── 3. Type coercions ────────────────────────────────────────
-# Categorical
-cat_cols <- c(
-  "listing_type", "district", "neighbourhood",
-  "UsingStatus", "BuildStatus", "TitleStatus", "HeatingType",
-  "StructureType", "BalconyType", "EligibilityForInvestment",
-  "ItemStatus", "CreditEligibility", "InsideTheSite",
-  "MortgageStatus", "Swap", "Balcony", "IsItVideoNavigable?",
-  "NumberOfRooms", "FloorLocation", "KitchenType",
-  "Elevator", "Parking"
-)
-for (col in cat_cols) {
-  if (col %in% names(df)) df[[col]] <- as.factor(df[[col]])
-}
+cat("Shape   :", nrow(df), "x", ncol(df), "\n")
+cat("Columns :", paste(names(df), collapse = ", "), "\n\n")
 
-# Binary logical
-bin_cols <- c("Elevator", "Parking", "InsideTheSite",
-              "CreditEligibility", "EligibilityForInvestment")
-for (col in bin_cols) {
-  if (col %in% names(df)) {
-    df[[col]] <- df[[col]] %in% c("Var", "Evet", "var", "evet", "TRUE", "1")
-  }
-}
-
-# Numeric
+# Numeric coercions
+# These are the exact names cleaning.py outputs
 num_cols <- c(
   "price", "GrossSquareMeters", "HallSquareMeters",
   "buildingAge", "numberOfBathrooms", "numberOfBalconies",
@@ -64,36 +43,79 @@ num_cols <- c(
   "BalconySquareMeters", "WCSquareMeters"
 )
 for (col in num_cols) {
-  if (col %in% names(df)) df[[col]] <- suppressWarnings(as.numeric(df[[col]]))
+  if (col %in% names(df))
+    df[[col]] <- suppressWarnings(as.numeric(df[[col]]))
 }
 
-# ── 4. Derived columns (if not already present) ───────────────
-if (!"price_per_m2" %in% names(df) && "price" %in% names(df) && "GrossSquareMeters" %in% names(df)) {
+# factor coercions 
+cat_cols <- c(
+  "listing_type", "district", "neighbourhood",
+  "NumberOfRooms", "FloorLocation", "HeatingType", "KitchenType",
+  "ItemStatus", "Elevator", "Parking", "InsideTheSite",
+  "UsingStatus", "BuildStatus", "TitleStatus", "TitleType",
+  "StructureType", "BalconyType", "Balcony",
+  "CreditEligibility", "EligibilityForInvestment",
+  "MortgageStatus", "Swap", "IsItVideoNavigable?",
+  "PropertyType", "FromWhom", "SiteName", "EnergyRating"
+)
+for (col in cat_cols) {
+  if (col %in% names(df))
+    df[[col]] <- as.factor(df[[col]])
+}
+
+# helpers
+yes_vals <- c("Var", "var", "Evet", "evet", "TRUE", "1", "true")
+
+df <- df %>%
+  mutate(
+    Elevator_lgl      = as.character(Elevator)      %in% yes_vals,
+    Parking_lgl       = as.character(Parking)       %in% yes_vals,
+    InsideTheSite_lgl = as.character(InsideTheSite) %in% yes_vals,
+    Furnished_lgl     = as.character(ItemStatus)    %in%
+      c("Eşyalı", "esyali", "Evet", "evet")
+  )
+
+#price_per_m2 (recalculate if missing or all NA)
+if (!"price_per_m2" %in% names(df) || all(is.na(df$price_per_m2))) {
   df <- df %>%
-    mutate(price_per_m2 = ifelse(GrossSquareMeters > 0, price / GrossSquareMeters, NA_real_))
+    mutate(price_per_m2 = ifelse(
+      !is.na(GrossSquareMeters) & GrossSquareMeters > 0,
+      price / GrossSquareMeters,
+      NA_real_
+    ))
 }
 
-# ── 5. Split sale / rent ──────────────────────────────────────
+# sale / rent 
 df_satilik <- df %>% filter(listing_type == "satilik")
 df_kiralik <- df %>% filter(listing_type == "kiralik")
 
-cat("Sale listings :", nrow(df_satilik), "\n")
-cat("Rent listings :", nrow(df_kiralik), "\n")
+cat("Total listings  :", nrow(df),         "\n")
+cat("Sale listings   :", nrow(df_satilik), "\n")
+cat("Rent listings   :", nrow(df_kiralik), "\n")
 
-# ── 6. Quick summary ─────────────────────────────────────────
-cat("\nPrice summary (all listings):\n")
+#  quick summary 
+cat("\nPrice summary:\n")
 print(summary(df$price))
-cat("\nMissing values (top 10):\n")
+
+cat("\nMissing values (top 15 columns with most NAs):\n")
 mis <- sort(colSums(is.na(df)), decreasing = TRUE)
-print(head(mis[mis > 0], 10))
+print(head(mis[mis > 0], 15))
 
-# ── 7. Save .rds ─────────────────────────────────────────────
-processed_dir <- here("data", "processed")
-dir.create(processed_dir, recursive = TRUE, showWarnings = FALSE)
+# create output directories
+for (d in c(
+  here("data", "processed"),
+  here("models"),
+  here("visuals", "histograms"),
+  here("visuals", "boxplots"),
+  here("visuals", "heatmaps"),
+  here("visuals", "regression_plots")
+)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
 
-saveRDS(df,         file.path(processed_dir, "all_listings.rds"))
-saveRDS(df_satilik, file.path(processed_dir, "satilik.rds"))
-saveRDS(df_kiralik, file.path(processed_dir, "kiralik.rds"))
+#  Save .rds 
+proc_dir <- here("data", "processed")
+saveRDS(df,         file.path(proc_dir, "all_listings.rds"))
+saveRDS(df_satilik, file.path(proc_dir, "satilik.rds"))
+saveRDS(df_kiralik, file.path(proc_dir, "kiralik.rds"))
 
 cat("\n✓  .rds files saved to data/processed/\n")
 cat("Next: source('r-analysis/03_descriptive_statistics.R')\n")

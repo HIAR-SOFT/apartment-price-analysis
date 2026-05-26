@@ -1,55 +1,42 @@
 # ============================================================
-# shiny-app/server.R
-# Istanbul Real Estate Price Estimator — Server Logic
+# shiny-app/server.R  —  column names aligned with cleaning.py
 # ============================================================
 
 library(shiny)
 library(dplyr)
-library(ggplot2)
 library(plotly)
 library(DT)
 library(randomForest)
 library(scales)
+library(here)
 
 server <- function(input, output, session) {
-
-  # ── Load data and models ──────────────────────────────────────
+  
+  # ── Load data & models ──────────────────────────────────────
   df <- reactive({
-    path <- here::here("data", "processed", "all_listings.rds")
-    if (file.exists(path)) {
-      readRDS(path)
-    } else {
-      # Return empty demo data if no real data yet
-      data.frame(
-        listing_type  = character(),
-        district      = character(),
-        mahalle       = character(),
-        price         = numeric(),
-        net_area_m2   = numeric(),
-        room_count    = numeric(),
-        building_age  = numeric(),
-        floor_number  = numeric(),
-        bathroom_count = numeric(),
-        price_per_m2  = numeric(),
-        elevator      = logical(),
-        parking       = logical(),
-        within_site   = logical(),
-        heating_type  = character()
-      )
-    }
+    p <- here("data", "processed", "all_listings.rds")
+    if (file.exists(p)) readRDS(p) else data.frame()
   })
-
+  
   rf_model <- reactive({
-    path <- here::here("models", "random_forest_model.rds")
-    if (file.exists(path)) readRDS(path) else NULL
+    p <- here("models", "random_forest_model.rds")
+    if (file.exists(p)) readRDS(p) else NULL
   })
-
+  
+  rf_features <- reactive({
+    p <- here("models", "rf_features.rds")
+    if (file.exists(p)) readRDS(p)$features else
+      c("GrossSquareMeters","room_count","numberOfBathrooms",
+        "buildingAge","Elevator","Parking","InsideTheSite",
+        "HeatingType","district")
+  })
+  
   lm_model <- reactive({
-    path <- here::here("models", "linear_regression_model.rds")
-    if (file.exists(path)) readRDS(path) else NULL
+    p <- here("models", "linear_regression_model.rds")
+    if (file.exists(p)) readRDS(p) else NULL
   })
-
-  # ── Populate district dropdown ─────────────────────────────
+  
+  # ── Populate district dropdown ──────────────────────────────
   observe({
     req(nrow(df()) > 0)
     districts <- df() %>%
@@ -59,321 +46,260 @@ server <- function(input, output, session) {
       arrange(district) %>%
       pull(district) %>%
       as.character()
-
     updateSelectInput(session, "district",
-      choices  = setNames(districts, districts),
-      selected = districts[1]
-    )
+                      choices = setNames(districts, districts),
+                      selected = districts[1])
   })
-
-  # ── Price prediction ──────────────────────────────────────
+  
+  # ── Prediction ──────────────────────────────────────────────
   prediction <- eventReactive(input$predict_btn, {
-    new_apt <- data.frame(
-      net_area_m2    = input$net_area,
-      room_count     = as.numeric(input$room_count),
-      bathroom_count = input$bathroom_count,
-      floor_number   = input$floor_number,
-      building_age   = input$building_age,
-      elevator       = as.factor(input$elevator),
-      parking        = as.factor(input$parking),
-      within_site    = as.factor(input$within_site),
-      furnished      = as.factor(input$furnished),
-      district       = as.factor(input$district),
-      heating_type   = as.factor(input$heating_type)
-    )
-
     model <- rf_model()
-    if (is.null(model)) {
-      return(list(price = NA, low = NA, high = NA, method = "No model"))
-    }
-
-    # Align factor levels with training data
-    for (col in names(new_apt)) {
-      if (is.factor(new_apt[[col]])) {
-        train_levels <- levels(model$forest$xlevels[[col]])
-        if (!is.null(train_levels)) {
-          levels(new_apt[[col]]) <- union(levels(new_apt[[col]]), train_levels)
-        }
-      }
-    }
-
-    log_pred <- predict(model, newdata = new_apt)
-    price    <- exp(log_pred)
-
-    # Confidence interval: ±15% based on typical RF prediction spread
-    list(
-      price  = price,
-      low    = price * 0.85,
-      high   = price * 1.15,
-      method = "Random Forest"
+    feats <- rf_features()
+    
+    new_apt <- data.frame(
+      GrossSquareMeters = as.numeric(input$net_area),
+      room_count        = as.numeric(input$room_count),
+      numberOfBathrooms = as.numeric(input$bathroom_count),
+      buildingAge       = as.numeric(input$building_age),
+      Elevator          = as.logical(input$elevator),
+      Parking           = as.logical(input$parking),
+      InsideTheSite     = as.logical(input$within_site),
+      HeatingType       = factor(input$heating_type),
+      district          = factor(input$district)
     )
+    
+    if (is.null(model)) {
+      return(list(price=NA, low=NA, high=NA, method="No model — run scripts 06 & 07"))
+    }
+    
+    # Align factor levels to training data
+    for (col in c("HeatingType", "district")) {
+      lvls <- levels(model$forest$xlevels[[col]])
+      if (!is.null(lvls))
+        new_apt[[col]] <- factor(as.character(new_apt[[col]]),
+                                 levels = union(levels(new_apt[[col]]), lvls))
+    }
+    
+    log_pred <- tryCatch(
+      predict(model, newdata = new_apt[, feats, drop=FALSE]),
+      error = function(e) {
+        cat("Prediction error:", conditionMessage(e), "\n")
+        NA
+      }
+    )
+    
+    if (is.na(log_pred)) return(list(price=NA, low=NA, high=NA, method="Error"))
+    
+    price <- exp(log_pred)
+    list(price=price, low=price*0.85, high=price*1.15, method="Random Forest")
   })
-
-  # ── Similar apartments (same district, ±20% area) ─────────
-  similar_apts <- eventReactive(input$predict_btn, {
+  
+  # ── Similar apartments ──────────────────────────────────────
+  similar <- eventReactive(input$predict_btn, {
     req(nrow(df()) > 0)
     df() %>%
       filter(
         listing_type == input$listing_type,
         district     == input$district,
         !is.na(price),
-        !is.na(net_area_m2),
-        net_area_m2 >= input$net_area * 0.8,
-        net_area_m2 <= input$net_area * 1.2
+        !is.na(GrossSquareMeters),
+        GrossSquareMeters >= input$net_area * 0.8,
+        GrossSquareMeters <= input$net_area * 1.2
       ) %>%
-      arrange(abs(net_area_m2 - input$net_area)) %>%
+      arrange(abs(GrossSquareMeters - input$net_area)) %>%
       head(50)
   })
-
-  # ── Outputs ───────────────────────────────────────────────────
-
+  
+  # ── UI outputs ───────────────────────────────────────────────
   output$price_display <- renderUI({
     pred <- prediction()
+    fmt  <- function(x) format(round(x), big.mark=",")
     if (is.na(pred$price)) {
-      return(div(class = "price-display", "Run the analysis scripts first"))
+      return(div(class="price-display", pred$method))
     }
-
-    fmt <- function(x) format(round(x), big.mark = ",")
-
+    unit <- if (input$listing_type == "satilik") "TL" else "TL / ay"
     div(
-      div(class = "price-display",
-          if (input$listing_type == "satilik") {
-            paste0(fmt(pred$price), " TL")
-          } else {
-            paste0(fmt(pred$price), " TL / month")
-          }
-      ),
-      div(class = "price-range",
-          sprintf("Estimated range: %s – %s TL", fmt(pred$low), fmt(pred$high))),
-      div(style = "text-align:center; color:#999; font-size:0.85em; margin-top:6px;",
+      div(class="price-display", paste0(fmt(pred$price), " ", unit)),
+      div(class="price-range",
+          sprintf("Tahmini aralık: %s – %s TL", fmt(pred$low), fmt(pred$high))),
+      div(style="text-align:center;color:#999;font-size:.85em;margin-top:6px;",
           paste("Method:", pred$method))
     )
   })
-
+  
   output$stat_avg_price <- renderUI({
-    s <- similar_apts()
-    avg <- if (nrow(s) > 0) mean(s$price, na.rm = TRUE) else NA
-    div(
-      div(class = "stat-value",
-          if (is.na(avg)) "—" else format(round(avg), big.mark = ",")),
-      div(class = "stat-label", "Avg price (district)")
-    )
+    s <- similar(); avg <- if(nrow(s)>0) mean(s$price,na.rm=TRUE) else NA
+    div(div(class="stat-value",
+            if(is.na(avg)) "—" else format(round(avg), big.mark=",")),
+        div(class="stat-label", "Ort. fiyat (ilçe)"))
   })
-
+  
   output$stat_median_price <- renderUI({
-    s <- similar_apts()
-    med <- if (nrow(s) > 0) median(s$price, na.rm = TRUE) else NA
-    div(
-      div(class = "stat-value",
-          if (is.na(med)) "—" else format(round(med), big.mark = ",")),
-      div(class = "stat-label", "Median price")
-    )
+    s <- similar(); med <- if(nrow(s)>0) median(s$price,na.rm=TRUE) else NA
+    div(div(class="stat-value",
+            if(is.na(med)) "—" else format(round(med), big.mark=",")),
+        div(class="stat-label", "Medyan fiyat"))
   })
-
+  
   output$stat_price_m2 <- renderUI({
-    s <- similar_apts()
-    ppm2 <- if (nrow(s) > 0) mean(s$price_per_m2, na.rm = TRUE) else NA
-    div(
-      div(class = "stat-value",
-          if (is.na(ppm2)) "—" else format(round(ppm2), big.mark = ",")),
-      div(class = "stat-label", "Avg TL / m²")
-    )
+    s <- similar(); pm2 <- if(nrow(s)>0) mean(s$price_per_m2,na.rm=TRUE) else NA
+    div(div(class="stat-value",
+            if(is.na(pm2)) "—" else format(round(pm2), big.mark=",")),
+        div(class="stat-label", "Ort. TL / m²"))
   })
-
+  
   output$similar_distribution <- renderPlotly({
-    s <- similar_apts()
-    pred <- prediction()
-
-    p <- if (nrow(s) == 0) {
-      plot_ly() %>% layout(title = "No similar listings found in this district")
-    } else {
-      plot_ly(s, x = ~price, type = "histogram",
-              marker = list(color = "#2196F3", line = list(color = "white", width = 0.5)),
-              nbinsx = 30,
-              name = "Similar listings") %>%
-        add_lines(x = c(pred$price, pred$price), y = c(0, 50),
-                  line = list(color = "red", dash = "dash", width = 2),
-                  name = "Your estimate") %>%
-        layout(
-          title = list(text = "Price Distribution of Similar Apartments", font = list(size = 14)),
-          xaxis = list(title = "Price (TL)", tickformat = ",.0f"),
-          yaxis = list(title = "Count"),
-          showlegend = TRUE,
-          margin = list(t = 40)
-        )
-    }
-    p
+    s <- similar(); pred <- prediction()
+    if (nrow(s) == 0)
+      return(plot_ly() %>% layout(title="Bu ilçede benzer ilan bulunamadı."))
+    
+    plot_ly(s, x=~price, type="histogram",
+            marker=list(color="#2196F3",
+                        line=list(color="white",width=0.5)),
+            nbinsx=30, name="Benzer ilanlar") %>%
+      add_lines(x=c(pred$price,pred$price), y=c(0,50),
+                line=list(color="red",dash="dash",width=2),
+                name="Tahmininiz") %>%
+      layout(
+        title=list(text="Benzer Dairelerin Fiyat Dağılımı", font=list(size=13)),
+        xaxis=list(title="Fiyat (TL)", tickformat=",.0f"),
+        yaxis=list(title="Sayı"),
+        showlegend=TRUE, margin=list(t=40)
+      )
   })
-
+  
   output$similar_table <- renderDT({
-    s <- similar_apts()
-    if (nrow(s) == 0) return(data.frame(message = "No similar listings found."))
-
+    s <- similar()
+    if (nrow(s) == 0) return(data.frame(Mesaj="Benzer ilan bulunamadı."))
     s %>%
-      select(district, mahalle, price, net_area_m2, room_count_label, building_age, price_per_m2) %>%
-      mutate(
-        price        = format(round(price),        big.mark = ","),
-        price_per_m2 = format(round(price_per_m2), big.mark = ",")
-      ) %>%
-      rename(
-        District = district, Neighbourhood = mahalle,
-        "Price (TL)" = price, "Area (m²)" = net_area_m2,
-        Rooms = room_count_label, "Age (yrs)" = building_age,
-        "TL/m²" = price_per_m2
-      ) %>%
-      datatable(options = list(pageLength = 8, scrollX = TRUE), rownames = FALSE)
+      select(any_of(c("district","neighbourhood","price",
+                      "GrossSquareMeters","NumberOfRooms",
+                      "buildingAge","price_per_m2"))) %>%
+      mutate(across(c(price, price_per_m2),
+                    ~ format(round(as.numeric(.)), big.mark=","))) %>%
+      rename_with(~ c("İlçe","Mahalle","Fiyat (TL)","Brüt m²",
+                      "Oda","Bina Yaşı","TL/m²")[seq_along(.)]) %>%
+      datatable(options=list(pageLength=8, scrollX=TRUE), rownames=FALSE)
   })
-
-  # ── Market Statistics tab ──────────────────────────────────
+  
+  # ── Market Statistics tab ───────────────────────────────────
   output$market_histogram <- renderPlotly({
-    req(nrow(df()) > 0)
-    d <- df() %>% filter(listing_type == input$stats_type, !is.na(price))
-    plot_ly(d, x = ~price, type = "histogram",
-            marker = list(color = "#2196F3"),
-            nbinsx = 60) %>%
-      layout(
-        xaxis = list(title = "Price (TL)", tickformat = ",.0f"),
-        yaxis = list(title = "Count")
-      )
+    req(nrow(df())>0)
+    d <- df() %>% filter(listing_type==input$stats_type, !is.na(price))
+    plot_ly(d, x=~price, type="histogram",
+            marker=list(color="#2196F3"), nbinsx=60) %>%
+      layout(xaxis=list(title="Fiyat (TL)",tickformat=",.0f"),
+             yaxis=list(title="Sayı"))
   })
-
+  
   output$price_by_room <- renderPlotly({
-    req(nrow(df()) > 0)
+    req(nrow(df())>0)
     d <- df() %>%
-      filter(listing_type == "satilik", !is.na(room_count_label), !is.na(price)) %>%
-      filter(room_count_label %in% c("1+1", "2+1", "3+1", "4+1", "5+1"))
-
-    plot_ly(d, x = ~room_count_label, y = ~price, type = "box",
-            marker = list(opacity = 0.5)) %>%
-      layout(
-        xaxis = list(title = "Room Count"),
-        yaxis = list(title = "Price (TL)", tickformat = ",.0f")
-      )
+      filter(listing_type=="satilik",
+             !is.na(NumberOfRooms), !is.na(price),
+             NumberOfRooms %in% c("1+1","2+1","3+1","4+1","5+1"))
+    plot_ly(d, x=~NumberOfRooms, y=~price, type="box",
+            marker=list(opacity=0.5)) %>%
+      layout(xaxis=list(title="Oda Sayısı"),
+             yaxis=list(title="Fiyat (TL)",tickformat=",.0f"))
   })
-
+  
   output$price_per_m2_hist <- renderPlotly({
-    req(nrow(df()) > 0)
-    d <- df() %>% filter(listing_type == "satilik", !is.na(price_per_m2))
-    plot_ly(d, x = ~price_per_m2, type = "histogram",
-            marker = list(color = "#FF9800"), nbinsx = 50) %>%
-      layout(
-        xaxis = list(title = "TL per m²", tickformat = ",.0f"),
-        yaxis = list(title = "Count")
-      )
+    req(nrow(df())>0)
+    d <- df() %>% filter(listing_type=="satilik", !is.na(price_per_m2))
+    plot_ly(d, x=~price_per_m2, type="histogram",
+            marker=list(color="#FF9800"), nbinsx=50) %>%
+      layout(xaxis=list(title="TL / m²",tickformat=",.0f"),
+             yaxis=list(title="Sayı"))
   })
-
+  
   output$correlation_heatmap <- renderPlotly({
-    req(nrow(df()) > 0)
-    num_cols <- c("price", "net_area_m2", "room_count", "floor_number",
-                  "building_age", "bathroom_count", "price_per_m2")
-    cor_data <- df() %>%
-      select(any_of(num_cols)) %>%
-      filter(if_all(everything(), ~ !is.na(.))) %>%
+    req(nrow(df())>0)
+    cols <- c("price","GrossSquareMeters","room_count",
+              "buildingAge","numberOfBathrooms","price_per_m2")
+    cols <- cols[cols %in% names(df())]
+    cm <- df() %>%
+      select(all_of(cols)) %>%
+      mutate(across(everything(), as.numeric)) %>%
+      filter(if_all(everything(), ~!is.na(.))) %>%
       cor()
-
-    plot_ly(
-      x = colnames(cor_data), y = rownames(cor_data), z = cor_data,
-      type = "heatmap",
-      colorscale = list(c(0, "#E91E63"), c(0.5, "white"), c(1, "#2196F3")),
-      zmin = -1, zmax = 1,
-      text = round(cor_data, 2), texttemplate = "%{text}"
-    ) %>%
-      layout(margin = list(l = 100, b = 100))
+    plot_ly(x=colnames(cm), y=rownames(cm), z=cm, type="heatmap",
+            colorscale=list(c(0,"#E91E63"),c(.5,"white"),c(1,"#2196F3")),
+            zmin=-1, zmax=1,
+            text=round(cm,2), texttemplate="%{text}") %>%
+      layout(margin=list(l=120,b=120))
   })
-
-  # ── District Explorer tab ──────────────────────────────────
-  district_summary <- reactive({
-    req(nrow(df()) > 0)
+  
+  # ── District Explorer tab ───────────────────────────────────
+  dist_summary <- reactive({
+    req(nrow(df())>0)
     df() %>%
-      filter(listing_type == input$district_type, !is.na(price), !is.na(district)) %>%
+      filter(listing_type==input$district_type,
+             !is.na(price), !is.na(district)) %>%
       group_by(district) %>%
       summarise(
         count        = n(),
-        avg_price    = mean(price, na.rm = TRUE),
-        median_price = median(price, na.rm = TRUE),
-        avg_price_m2 = mean(price_per_m2, na.rm = TRUE),
-        .groups = "drop"
+        avg_price    = mean(price,        na.rm=TRUE),
+        median_price = median(price,      na.rm=TRUE),
+        avg_price_m2 = mean(price_per_m2, na.rm=TRUE),
+        .groups="drop"
       ) %>%
       filter(count >= 5) %>%
       arrange(desc(avg_price))
   })
-
+  
   output$district_chart <- renderPlotly({
-    d <- district_summary() %>% head(20)
-    plot_ly(d,
-      x = ~avg_price,
-      y = ~reorder(district, avg_price),
-      type = "bar",
-      orientation = "h",
-      marker = list(color = "#2196F3", opacity = 0.8),
-      text = ~format(round(avg_price), big.mark = ","),
-      textposition = "outside"
-    ) %>%
-      layout(
-        xaxis = list(title = "Average Price (TL)", tickformat = ",.0f"),
-        yaxis = list(title = ""),
-        margin = list(l = 130)
-      )
+    d <- dist_summary() %>% head(20)
+    plot_ly(d, x=~avg_price, y=~reorder(district,avg_price),
+            type="bar", orientation="h",
+            marker=list(color="#2196F3",opacity=0.8),
+            text=~format(round(avg_price),big.mark=","),
+            textposition="outside") %>%
+      layout(xaxis=list(title="Ort. Fiyat (TL)",tickformat=",.0f"),
+             yaxis=list(title=""), margin=list(l=130))
   })
-
+  
   output$district_table <- renderDT({
-    district_summary() %>%
-      mutate(across(c(avg_price, median_price, avg_price_m2),
-                    ~ format(round(.), big.mark = ","))) %>%
-      rename(
-        District = district, Count = count,
-        "Avg Price" = avg_price, "Median Price" = median_price,
-        "Avg TL/m²" = avg_price_m2
-      ) %>%
-      datatable(options = list(pageLength = 15), rownames = FALSE)
+    dist_summary() %>%
+      mutate(across(c(avg_price,median_price,avg_price_m2),
+                    ~format(round(as.numeric(.)),big.mark=","))) %>%
+      rename(İlçe=district, Adet=count,
+             "Ort. Fiyat"=avg_price, "Medyan Fiyat"=median_price,
+             "Ort. TL/m²"=avg_price_m2) %>%
+      datatable(options=list(pageLength=15), rownames=FALSE)
   })
-
-  # ── Model Info tab ─────────────────────────────────────────
+  
+  # ── Model Info tab ──────────────────────────────────────────
   output$lm_summary <- renderPrint({
     m <- lm_model()
-    if (is.null(m)) {
-      cat("Linear regression model not yet trained.\nRun: Rscript r-analysis/06_regression_model.R")
-    } else {
-      print(summary(m))
-    }
+    if (is.null(m)) cat("Modeli eğitmek için 06_regression_model.R çalıştırın.") else print(summary(m))
   })
-
+  
   output$rf_importance <- renderPlotly({
     m <- rf_model()
-    if (is.null(m)) return(plot_ly() %>% layout(title = "Model not trained yet"))
-
+    if (is.null(m)) return(plot_ly() %>% layout(title="Model henüz eğitilmedi."))
     imp <- as.data.frame(importance(m)) %>%
       tibble::rownames_to_column("feature") %>%
       arrange(`%IncMSE`)
-
-    plot_ly(imp, x = ~`%IncMSE`, y = ~reorder(feature, `%IncMSE`),
-            type = "bar", orientation = "h",
-            marker = list(color = "#FF5722")) %>%
-      layout(
-        xaxis = list(title = "% Increase in MSE"),
-        yaxis = list(title = ""),
-        margin = list(l = 130)
-      )
+    plot_ly(imp, x=~`%IncMSE`, y=~reorder(feature,`%IncMSE`),
+            type="bar", orientation="h",
+            marker=list(color="#FF5722")) %>%
+      layout(xaxis=list(title="% MSE Artışı"),
+             yaxis=list(title=""), margin=list(l=160))
   })
-
+  
   output$model_comparison_plot <- renderPlotly({
-    lm_path <- here::here("models", "lm_metrics.rds")
-    rf_path <- here::here("models", "rf_metrics.rds")
-
-    if (!file.exists(lm_path) || !file.exists(rf_path)) {
+    lp <- here("models","lm_metrics.rds")
+    rp <- here("models","rf_metrics.rds")
+    if (!file.exists(lp)||!file.exists(rp))
       return(plot_ly() %>%
-        layout(title = "Run 06_regression_model.R and 07_random_forest.R first"))
-    }
-
-    comparison <- bind_rows(readRDS(lm_path), readRDS(rf_path))
-
-    plot_ly(comparison, x = ~model, y = ~R2, type = "bar",
-            marker = list(color = c("#2196F3", "#FF5722")),
-            name = "R²") %>%
-      layout(
-        title = "Model R² Comparison",
-        xaxis = list(title = ""),
-        yaxis = list(title = "R² Score", range = c(0, 1))
-      )
+               layout(title="Önce 06 ve 07 numaralı scriptleri çalıştırın."))
+    comp <- bind_rows(readRDS(lp), readRDS(rp))
+    plot_ly(comp, x=~model, y=~R2, type="bar",
+            marker=list(color=c("#2196F3","#FF5722")),
+            name="R²") %>%
+      layout(title="Model R² Karşılaştırması",
+             xaxis=list(title=""),
+             yaxis=list(title="R² Skoru", range=c(0,1)))
   })
 }

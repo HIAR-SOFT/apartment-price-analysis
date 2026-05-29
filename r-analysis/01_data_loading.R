@@ -1,108 +1,137 @@
+# ============================================================
 # 01_data_loading.R
-
+# Istanbul Real-Estate — Sahibinden.com Kaggle dataset (May 2022)
+# Columns in raw file:
+#   Unnamed: 0 | title | area | numberOfRooms | price | town | district
+# ============================================================
 
 library(readr)
 library(dplyr)
+library(stringr)
 library(here)
 
-# Find most recent cleaned CSV
-cleaned_dir <- here("data", "cleaned")
-csv_files   <- list.files(cleaned_dir,
-                          pattern = "cleaned_listings.*\\.csv$",
-                          full.names = TRUE)
+# ── 0. Locate raw CSV ─────────────────────────────────────────
+raw_file <- here("data", "raw", "22_5_2022_sahibinden_ev.csv")
 
-if (length(csv_files) == 0) {
+if (!file.exists(raw_file)) {
   stop(
-    "No cleaned CSV in data/cleaned/\n",
-    "Run:\n",
-    "  python scraper/scraper.py\n",
-    "  python scraper/parser.py  --input data/raw/listing_links_XXX.json\n",
-    "  python scraper/cleaning.py --input data/raw/raw_listings_XXX.csv\n"
+    "Raw dataset not found at: ", raw_file, "\n",
+    "Place '22_5_2022_sahibinden_ev.csv' in data/raw/ and re-run."
   )
 }
 
-csv_file <- csv_files[length(csv_files)]
-cat("Loading:", csv_file, "\n")
+cat("Loading:", raw_file, "\n")
+raw <- read_csv(raw_file, show_col_types = FALSE)
+cat("Raw shape:", nrow(raw), "x", ncol(raw), "\n")
+cat("Raw columns:", paste(names(raw), collapse = ", "), "\n\n")
 
-#  Read 
-df <- read_csv(csv_file,
-               locale         = locale(encoding = "UTF-8"),
-               show_col_types = FALSE)
+# ── 1. Rename for clarity ─────────────────────────────────────
+df <- raw %>%
+  rename(
+    row_id        = `Unnamed: 0`,
+    title         = title,
+    GrossSquareMeters = area,
+    NumberOfRooms = numberOfRooms,
+    price_raw     = price,
+    town_raw      = town,
+    district_raw  = district
+  )
 
-cat("Shape   :", nrow(df), "x", ncol(df), "\n")
-cat("Columns :", paste(names(df), collapse = ", "), "\n\n")
+# ── 2. Parse price ────────────────────────────────────────────
+# Prices stored as "1.750.000" (Turkish thousands-dot notation)
+df <- df %>%
+  mutate(
+    price = as.numeric(str_replace_all(price_raw, "\\.", ""))
+  )
 
-# Numeric coercions
-# These are the exact names cleaning.py outputs
-num_cols <- c(
-  "price", "GrossSquareMeters", "HallSquareMeters",
-  "buildingAge", "numberOfBathrooms", "numberOfBalconies",
-  "numberFloorsOfBuilding", "rentalIncome", "subscription",
-  "adUpdateMonth", "adUpdateYear", "adActiveDays",
-  "room_count", "price_per_m2",
-  "BalconySquareMeters", "WCSquareMeters"
-)
-for (col in num_cols) {
-  if (col %in% names(df))
-    df[[col]] <- suppressWarnings(as.numeric(df[[col]]))
+cat("Price parse failures:", sum(is.na(df$price)), "\n")
+
+# ── 3. Parse room count ───────────────────────────────────────
+# Format: "3+1", "2+1", "Stüdyo", "4+2", etc.
+# room_count = sum of all parts (e.g. 3+1 → 4)
+parse_rooms <- function(x) {
+  x <- as.character(x)
+  case_when(
+    tolower(x) == "stüdyo" ~ 1,
+    str_detect(x, "^[\\d.]+\\+[\\d.]+") ~ {
+      parts <- str_split(x, "\\+")
+      sapply(parts, function(p) sum(as.numeric(p), na.rm = TRUE))
+    },
+    TRUE ~ suppressWarnings(as.numeric(x))
+  )
 }
 
-# factor coercions 
-cat_cols <- c(
-  "listing_type", "district", "neighbourhood",
-  "NumberOfRooms", "FloorLocation", "HeatingType", "KitchenType",
-  "ItemStatus", "Elevator", "Parking", "InsideTheSite",
-  "UsingStatus", "BuildStatus", "TitleStatus", "TitleType",
-  "StructureType", "BalconyType", "Balcony",
-  "CreditEligibility", "EligibilityForInvestment",
-  "MortgageStatus", "Swap", "IsItVideoNavigable?",
-  "PropertyType", "FromWhom", "SiteName", "EnergyRating"
-)
-for (col in cat_cols) {
-  if (col %in% names(df))
-    df[[col]] <- as.factor(df[[col]])
-}
+df <- df %>%
+  mutate(room_count = parse_rooms(NumberOfRooms))
 
-# helpers
-yes_vals <- c("Var", "var", "Evet", "evet", "TRUE", "1", "true")
+cat("Room count NA:", sum(is.na(df$room_count)), "\n")
+
+# ── 4. Extract sub-district from town_raw ─────────────────────
+# town_raw is neighbourhood text concatenated with mahalle name,
+# e.g. "ArnavutköyAnadolu Mah" or "GürpınarAdnan Kahveci Mah".
+# We extract the leading capitalised run as the sub-district.
+extract_sub_district <- function(town) {
+  if_else(
+    is.na(town),
+    NA_character_,
+    str_extract(town, "^[\\p{Lu}][^\\s]+(?:\\s[^\\s]+)*?(?=[\\p{Lu}][\\p{Ll}])")
+  )
+}
 
 df <- df %>%
   mutate(
-    Elevator_lgl      = as.character(Elevator)      %in% yes_vals,
-    Parking_lgl       = as.character(Parking)       %in% yes_vals,
-    InsideTheSite_lgl = as.character(InsideTheSite) %in% yes_vals,
-    Furnished_lgl     = as.character(ItemStatus)    %in%
-      c("Eşyalı", "esyali", "Evet", "evet")
+    sub_district  = extract_sub_district(town_raw),
+    neighbourhood = town_raw
   )
 
-#price_per_m2 (recalculate if missing or all NA)
-if (!"price_per_m2" %in% names(df) || all(is.na(df$price_per_m2))) {
-  df <- df %>%
-    mutate(price_per_m2 = ifelse(
+cat("Sub-district extracted:", sum(!is.na(df$sub_district)), "/", nrow(df), "\n")
+
+# ── 5. Derived features ───────────────────────────────────────
+df <- df %>%
+  mutate(
+    price_per_m2 = if_else(
       !is.na(GrossSquareMeters) & GrossSquareMeters > 0,
       price / GrossSquareMeters,
       NA_real_
-    ))
-}
+    ),
+    # All listings in this dataset are for sale
+    listing_type = "satilik"
+  )
 
-# sale / rent 
-df_satilik <- df %>% filter(listing_type == "satilik")
-df_kiralik <- df %>% filter(listing_type == "kiralik")
+# ── 6. Basic quality filter (remove extreme outliers) ─────────
+# Retain prices between 1st and 99th percentile; area 20–500 m²
+p01  <- quantile(df$price, 0.01, na.rm = TRUE)
+p99  <- quantile(df$price, 0.99, na.rm = TRUE)
 
-cat("Total listings  :", nrow(df),         "\n")
-cat("Sale listings   :", nrow(df_satilik), "\n")
-cat("Rent listings   :", nrow(df_kiralik), "\n")
+df_clean <- df %>%
+  filter(
+    !is.na(price),
+    price  >= p01,  price  <= p99,
+    !is.na(GrossSquareMeters),
+    GrossSquareMeters >= 20, GrossSquareMeters <= 500,
+    !is.na(room_count)
+  )
 
-#  quick summary 
-cat("\nPrice summary:\n")
-print(summary(df$price))
+cat("\nAfter quality filter:", nrow(df_clean), "rows retained (from", nrow(df), ")\n")
+cat("Removed:", nrow(df) - nrow(df_clean), "rows\n\n")
 
-cat("\nMissing values (top 15 columns with most NAs):\n")
-mis <- sort(colSums(is.na(df)), decreasing = TRUE)
-print(head(mis[mis > 0], 15))
+# ── 7. Summary ────────────────────────────────────────────────
+cat("=== PRICE SUMMARY (after filter) ===\n")
+print(summary(df_clean$price))
 
-# create output directories
+cat("\n=== AREA SUMMARY ===\n")
+print(summary(df_clean$GrossSquareMeters))
+
+cat("\n=== ROOM COUNT ===\n")
+print(table(df_clean$NumberOfRooms))
+
+cat("\n=== MISSING VALUES ===\n")
+mis <- sort(colSums(is.na(df_clean)), decreasing = TRUE)
+print(mis[mis > 0])
+
+# ── 8. Create directories & save ──────────────────────────────
 for (d in c(
+  here("data", "cleaned"),
   here("data", "processed"),
   here("models"),
   here("visuals", "histograms"),
@@ -111,11 +140,12 @@ for (d in c(
   here("visuals", "regression_plots")
 )) dir.create(d, recursive = TRUE, showWarnings = FALSE)
 
-#  Save .rds 
-proc_dir <- here("data", "processed")
-saveRDS(df,         file.path(proc_dir, "all_listings.rds"))
-saveRDS(df_satilik, file.path(proc_dir, "satilik.rds"))
-saveRDS(df_kiralik, file.path(proc_dir, "kiralik.rds"))
+# Write cleaned CSV (for reference)
+write_csv(df_clean, here("data", "cleaned", "cleaned_listings.csv"))
 
-cat("\n✓  .rds files saved to data/processed/\n")
+# Write .rds for downstream scripts
+saveRDS(df_clean, here("data", "processed", "all_listings.rds"))
+
+cat("\n✓ Saved data/cleaned/cleaned_listings.csv\n")
+cat("✓ Saved data/processed/all_listings.rds\n")
 cat("Next: source('r-analysis/03_descriptive_statistics.R')\n")

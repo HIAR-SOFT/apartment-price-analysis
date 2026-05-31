@@ -22,16 +22,16 @@ describe <- function(x, label = "value") {
       min = NA_real_, max = NA_real_, skewness = NA_real_,
       kurtosis = NA_real_
     ))
-
+  
   # Pearson skewness and excess kurtosis
-  n      <- length(x)
-  m      <- mean(x)
-  s      <- sd(x)
-  sk     <- (n / ((n - 1) * (n - 2))) * sum(((x - m) / s)^3)
-  kurt   <- ((n * (n + 1)) / ((n - 1) * (n - 2) * (n - 3))) *
-              sum(((x - m) / s)^4) -
-              (3 * (n - 1)^2) / ((n - 2) * (n - 3))
-
+  n    <- length(x)
+  m    <- mean(x)
+  s    <- sd(x)
+  sk   <- (n / ((n - 1) * (n - 2))) * sum(((x - m) / s)^3)
+  kurt <- ((n * (n + 1)) / ((n - 1) * (n - 2) * (n - 3))) *
+    sum(((x - m) / s)^4) -
+    (3 * (n - 1)^2) / ((n - 2) * (n - 3))
+  
   tibble(
     variable = label, n = n,
     mean     = m,
@@ -52,40 +52,55 @@ price_stats <- describe(df$price, "Sale price (TL)")
 cat("=== PRICE STATISTICS ===\n")
 print(price_stats, width = 120)
 
-# ── 2. Area stats ─────────────────────────────────────────────
+# ── 2. Gross area stats ───────────────────────────────────────
 area_stats <- describe(df$GrossSquareMeters, "Gross area (m²)")
-cat("\n=== AREA STATISTICS ===\n")
+cat("\n=== GROSS AREA STATISTICS ===\n")
 print(area_stats, width = 120)
 
-# ── 3. Price per m² ───────────────────────────────────────────
+# ── 3. Net area stats ─────────────────────────────────────────
+net_area_stats <- describe(df$NetSquareMeters, "Net area (m²)")
+cat("\n=== NET AREA STATISTICS ===\n")
+print(net_area_stats, width = 120)
+
+# ── 4. Price per m² ───────────────────────────────────────────
 ppm2_stats <- describe(df$price_per_m2, "Price per m² (TL)")
 cat("\n=== PRICE PER M² ===\n")
 print(ppm2_stats, width = 120)
 
-# ── 4. Room count distribution ────────────────────────────────
-cat("\n=== ROOM TYPE DISTRIBUTION ===\n")
+# ── 5. Room count distribution ────────────────────────────────
+# rooms is now a plain integer column — no string parsing needed
+cat("\n=== ROOM COUNT DISTRIBUTION ===\n")
 room_dist <- df %>%
-  filter(!is.na(NumberOfRooms)) %>%
-  count(NumberOfRooms, name = "count") %>%
+  filter(!is.na(rooms)) %>%
+  count(rooms, name = "count") %>%
   mutate(pct = round(100 * count / sum(count), 1)) %>%
-  arrange(desc(count))
-print(room_dist, n = 20)
+  arrange(rooms)
+print(room_dist, n = 30)
 
-# ── 5. Sub-district level stats ───────────────────────────────
+# ── 6. Building condition breakdown ──────────────────────────
+cat("\n=== BUILDING CONDITION ===\n")
+print(table(df$building_condition, useNA = "ifany"))
+
+# ── 7. Furnished status breakdown ────────────────────────────
+cat("\n=== FURNISHED STATUS ===\n")
+print(table(df$furnished, useNA = "ifany"))
+
+# ── 8. Sub-district level stats ───────────────────────────────
 if ("sub_district" %in% names(df)) {
   district_stats <- df %>%
     filter(!is.na(sub_district)) %>%
     group_by(sub_district) %>%
     summarise(
       count        = n(),
-      avg_price    = mean(price, na.rm = TRUE),
-      median_price = median(price, na.rm = TRUE),
-      avg_ppm2     = mean(price_per_m2, na.rm = TRUE),
-      avg_area_m2  = mean(GrossSquareMeters, na.rm = TRUE),
+      avg_price    = mean(price,            na.rm = TRUE),
+      median_price = median(price,          na.rm = TRUE),
+      avg_ppm2     = mean(price_per_m2,     na.rm = TRUE),
+      avg_gross_m2 = mean(GrossSquareMeters, na.rm = TRUE),
+      avg_net_m2   = mean(NetSquareMeters,  na.rm = TRUE),
       .groups = "drop"
     ) %>%
     arrange(desc(median_price))
-
+  
   cat("\n=== TOP 20 SUB-DISTRICTS BY MEDIAN PRICE ===\n")
   print(head(district_stats, 20), width = 120)
 } else {
@@ -93,34 +108,32 @@ if ("sub_district" %in% names(df)) {
   cat("\n[WARN] sub_district column not found.\n")
 }
 
-# ── 6. Coefficient of Variation (CV) ─────────────────────────
-# CV = (sd / mean) * 100 — measures relative dispersion
-cv_price <- (sd(df$price, na.rm = TRUE) / mean(df$price, na.rm = TRUE)) * 100
-cv_area  <- (sd(df$GrossSquareMeters, na.rm = TRUE) /
-             mean(df$GrossSquareMeters, na.rm = TRUE)) * 100
+# ── 9. Coefficient of Variation (CV) ─────────────────────────
+cv_price <- (sd(df$price,             na.rm = TRUE) / mean(df$price,             na.rm = TRUE)) * 100
+cv_area  <- (sd(df$GrossSquareMeters, na.rm = TRUE) / mean(df$GrossSquareMeters, na.rm = TRUE)) * 100
 
-cat(sprintf("\n=== COEFFICIENT OF VARIATION ===\n"))
+cat("\n=== COEFFICIENT OF VARIATION ===\n")
 cat(sprintf("Price CV : %.1f%%\n", cv_price))
 cat(sprintf("Area  CV : %.1f%%\n", cv_area))
 
-# ── 7. IQR and Outlier counts ────────────────────────────────
+# ── 10. IQR and Outlier counts ───────────────────────────────
 iqr_price <- IQR(df$price, na.rm = TRUE)
 fence_lo  <- quantile(df$price, 0.25, na.rm = TRUE) - 1.5 * iqr_price
 fence_hi  <- quantile(df$price, 0.75, na.rm = TRUE) + 1.5 * iqr_price
 n_outliers <- sum(df$price < fence_lo | df$price > fence_hi, na.rm = TRUE)
 
-cat(sprintf("\n=== TUKEY OUTLIER FENCES (Price) ===\n"))
+cat("\n=== TUKEY OUTLIER FENCES (Price) ===\n")
 cat(sprintf("IQR         : %s TL\n", format(round(iqr_price), big.mark = ",")))
 cat(sprintf("Lower fence : %s TL\n", format(round(fence_lo),  big.mark = ",")))
 cat(sprintf("Upper fence : %s TL\n", format(round(fence_hi),  big.mark = ",")))
 cat(sprintf("Outliers    : %d (%.1f%%)\n",
             n_outliers, 100 * n_outliers / nrow(df)))
 
-# ── 8. Save summaries ─────────────────────────────────────────
+# ── 11. Save summaries ────────────────────────────────────────
 vis_dir <- here("visuals")
 dir.create(vis_dir, recursive = TRUE, showWarnings = FALSE)
 
-all_stats <- bind_rows(price_stats, area_stats, ppm2_stats)
+all_stats <- bind_rows(price_stats, area_stats, net_area_stats, ppm2_stats)
 write_csv(all_stats,    here("visuals", "price_area_stats.csv"))
 write_csv(room_dist,    here("visuals", "room_distribution.csv"))
 if (nrow(district_stats) > 0)

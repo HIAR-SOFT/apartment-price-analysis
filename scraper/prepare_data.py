@@ -1,13 +1,12 @@
 """
 prepare_data.py
-Cleans 22_5_2022_sahibinden_ev.csv and outputs a
+Cleans istanbul_apartment_prices_2026.csv and outputs a
 cleaned_listings CSV ready for R analysis.
 
 Usage:
-    python scraper/prepare_data.py --input data/raw/22_5_2022_sahibinden_ev.csv
+    python scraper/prepare_data.py --input data/raw/istanbul_apartment_prices_2026.csv
 """
 
-import re
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -18,114 +17,14 @@ import pandas as pd
 OUTPUT_DIR = Path(__file__).parent.parent / "data" / "cleaned"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── Room count → integer ──────────────────────────────────────
-ROOM_MAP = {
-    "Stüdyo": 0, "1+0": 0, "2+0": 1,
-    "1+1": 1, "1.5+1": 1,
-    "2+1": 2, "2+2": 3, "2.5+1": 2,
-    "3+1": 3, "3+2": 4, "3.5+1": 3,
-    "4+1": 4, "4+2": 5, "4+3": 5, "4.5+1": 4,
-    "5+1": 5, "5+2": 6,
-    "6+1": 6, "6+2": 7,
-    "7+1": 7, "7+2": 8,
-    "8+2": 9, "8+3": 9,
-}
 
-# ── Neighbourhood prefix → Istanbul district ──────────────────
-N2D = {
-    "Büyükada": "Adalar", "Kınalıada": "Adalar",
-    "Burgazada": "Adalar", "Heybeliada": "Adalar",
-    "Arnavutköy": "Arnavutköy", "Bolluca": "Arnavutköy",
-    "Haraçcı": "Arnavutköy", "Hadımköy": "Arnavutköy",
-    "Karabayır": "Arnavutköy", "Mimarsinan": "Arnavutköy",
-    "Taşoluk": "Arnavutköy",
-    "Ataşehir": "Ataşehir", "İçerenköy": "Ataşehir",
-    "Kayışdağı": "Ataşehir", "Küçükbakkalköy": "Ataşehir",
-    "Yenisahra": "Ataşehir",
-    "Avcılar": "Avcılar", "Firuzköy": "Avcılar",
-    "Gümüşpala": "Avcılar", "Ambarlı": "Avcılar",
-    "Bağcılar": "Bağcılar", "Beştelsiz": "Bağcılar",
-    "Çırpıcı": "Bağcılar", "Güneşli": "Bağcılar",
-    "Kirazlı": "Bağcılar", "Sanayi15 Temmuz": "Bağcılar",
-    "Bahçelievler": "Bahçelievler", "Çobançeşme": "Bahçelievler",
-    "Kocasinan": "Bahçelievler", "Şirinevler": "Bahçelievler",
-    "Bakırköy": "Bakırköy", "Ataköy": "Bakırköy",
-    "Florya": "Bakırköy", "Kartaltepe": "Bakırköy",
-    "Yeşilköy": "Bakırköy", "Yeşilyurt": "Bakırköy",
-    "Başakşehir": "Başakşehir", "Bahçeşehir": "Başakşehir",
-    "Kayabaşı": "Başakşehir", "Altınşehir": "Başakşehir",
-    "Beşiktaş": "Beşiktaş", "Bebek": "Beşiktaş",
-    "Etiler": "Beşiktaş", "Levent": "Beşiktaş",
-    "Levazım": "Beşiktaş", "Ortaköy": "Beşiktaş",
-    "Türkali": "Beşiktaş", "Teşvikiye": "Beşiktaş",
-    "Nisbetiye": "Beşiktaş",
-    "Beykoz": "Beykoz", "Anadoluhisarı": "Beykoz",
-    "Paşabahçe": "Beykoz", "Kandilli": "Beykoz",
-    "Göksu": "Beykoz", "Göktürk": "Beykoz",
-    "Beylikdüzü": "Beylikdüzü", "Gürpınar": "Beylikdüzü",
-    "Kavaklı": "Beylikdüzü",
-    "Beyoğlu": "Beyoğlu", "Galata": "Beyoğlu",
-    "Karaköy": "Beyoğlu",
-    "Büyükçekmece": "Büyükçekmece", "Mimaroba": "Büyükçekmece",
-    "Kumburgaz": "Büyükçekmece",
-    "Esenler": "Esenler", "Havaalanı": "Esenler",
-    "Menderes": "Esenler",
-    "Esenyurt": "Esenyurt",
-    "Eyüpsultan": "Eyüpsultan", "Eyüp": "Eyüpsultan",
-    "Alibeyköy": "Eyüpsultan", "Nişanca": "Eyüpsultan",
-    "Fatih": "Fatih", "Aksaray": "Fatih",
-    "Balat": "Fatih", "Fener": "Fatih",
-    "Sultanahmet": "Fatih", "Yedikule": "Fatih",
-    "Gaziosmanpaşa": "Gaziosmanpaşa",
-    "Barbaros/Yeşilbağ": "Gaziosmanpaşa",
-    "Güngören": "Güngören", "Gençosman": "Güngören",
-    "Kadıköy": "Kadıköy", "Acıbadem": "Kadıköy",
-    "Bostancı": "Kadıköy", "Caddebostan": "Kadıköy",
-    "Erenköy": "Kadıköy", "Fenerbahçe": "Kadıköy",
-    "Göztepe": "Kadıköy", "Kozyatağı": "Kadıköy",
-    "Moda": "Kadıköy", "Suadiye": "Kadıköy",
-    "Dragos": "Kadıköy", "Küçükyalı": "Kadıköy",
-    "Kağıthane": "Kağıthane", "Gayrettepe": "Kağıthane",
-    "Mecidiyeköy": "Kağıthane",
-    "Kartal": "Kartal", "Cevizli": "Kartal",
-    "Yakacık": "Kartal", "Örnek": "Kartal",
-    "Soğanlık": "Kartal",
-    "Küçükçekmece": "Küçükçekmece", "Atakent": "Küçükçekmece",
-    "Halkalı": "Küçükçekmece", "İnönü": "Küçükçekmece",
-    "Sefaköy": "Küçükçekmece", "Cennet": "Küçükçekmece",
-    "Maltepe": "Maltepe", "Bağlarbaşı": "Maltepe",
-    "Altayçeşme": "Maltepe", "Findıklı": "Maltepe",
-    "Pendik": "Pendik", "Kurtköy": "Pendik",
-    "Kaynarca": "Pendik",
-    "Sancaktepe": "Sancaktepe", "Samandıra": "Sancaktepe",
-    "Sarıyer": "Sarıyer", "Tarabya": "Sarıyer",
-    "Yeniköy": "Sarıyer", "Zekeriyaköy": "Sarıyer",
-    "Büyükdere": "Sarıyer",
-    "Silivri": "Silivri", "Selimpaşa": "Silivri",
-    "Şile": "Şile",
-    "Şişli": "Şişli", "Fulya": "Şişli",
-    "Nişantaşı": "Şişli",
-    "Sultanbeyli": "Sultanbeyli",
-    "Sultangazi": "Sultangazi", "Cebeci": "Sultangazi",
-    "Tuzla": "Tuzla",
-    "Ümraniye": "Ümraniye", "Elmalikent": "Ümraniye",
-    "Çakmak": "Ümraniye",
-    "Üsküdar": "Üsküdar", "Beylerbeyi": "Üsküdar",
-    "Çengelköy": "Üsküdar", "Salacak": "Üsküdar",
-    "Merkez": "Üsküdar",
-    "Zeytinburnu": "Zeytinburnu", "Kazlıçeşme": "Zeytinburnu",
-}
-
-
-def split_town(town):
-    """Split concatenated 'NeighbourhoodMahalle Mh' → (neighbourhood, mahalle)."""
-    if pd.isna(town):
-        return None, None
-    s = re.sub(r"\s*(Mah\.|Mahallesi|Mah|Mh)$", "", str(town).strip()).strip()
-    m = re.search(r"(?<=[a-zçğışöüñ])(?=[A-ZÇĞİÖŞÜ])", s)
-    if m:
-        return s[: m.start()].strip(), s[m.start() :].strip()
-    return s, None
+def clean_boolean_col(series: pd.Series) -> pd.Series:
+    """Normalise free-text yes/no/0/1 columns to True/False/NA."""
+    mapping = {
+        "yes": True, "1": True, "true": True,
+        "no": False, "0": False, "false": False,
+    }
+    return series.astype(str).str.strip().str.lower().map(mapping)
 
 
 def main():
@@ -147,47 +46,66 @@ def main():
     out = pd.DataFrame()
 
     # ── identifiers ───────────────────────────────────────────
-    out["listing_id"]   = df["Unnamed: 0"].astype(str)
+    out["listing_id"]   = df["listing_id"].astype(str).str.strip()
     out["listing_type"] = "satilik"
-    out["title"]        = df["title"].astype(str).str.strip()
 
     # ── location ──────────────────────────────────────────────
-    neighbourhood, mahalle = zip(*df["town"].map(split_town))
-    out["neighbourhood"] = list(neighbourhood)
-    out["mahalle"]       = list(mahalle)
-    out["district"]      = pd.Series(neighbourhood).map(N2D).values
+    out["district"]      = df["district"].astype(str).str.strip()
+    out["neighbourhood"] = df["neighborhood"].astype(str).str.strip()
 
     # ── price ─────────────────────────────────────────────────
-    out["price"] = pd.to_numeric(
-        df["price"].astype(str).str.replace(r"[^\d]", "", regex=True),
-        errors="coerce",
-    )
+    out["price"] = pd.to_numeric(df["price"], errors="coerce")
 
     # ── area ──────────────────────────────────────────────────
-    out["GrossSquareMeters"] = pd.to_numeric(df["area"], errors="coerce")
-    # Net area not available in this dataset
-    out["HallSquareMeters"] = np.nan
+    out["GrossSquareMeters"] = pd.to_numeric(df["gross_sqm"], errors="coerce")
+    out["NetSquareMeters"]   = pd.to_numeric(df["net_sqm"],   errors="coerce")
 
-    # ── rooms ─────────────────────────────────────────────────
-    out["NumberOfRooms"] = df["numberOfRooms"].astype(str).str.strip()
-    out["room_count"]    = out["NumberOfRooms"].map(ROOM_MAP)
-
-    # ── derived ───────────────────────────────────────────────
+    # ── price per m² ──────────────────────────────────────────
+    # Prefer re-calculating from raw fields so it stays consistent after filtering
     out["price_per_m2"] = np.where(
         out["GrossSquareMeters"].notna() & (out["GrossSquareMeters"] > 0),
         out["price"] / out["GrossSquareMeters"],
         np.nan,
     )
 
-    # ── columns absent in this dataset (kept NA for R compat) ─
-    for col in [
-        "buildingAge", "floorNum", "numberFloorsOfBuilding",
-        "numberOfBathrooms", "HeatingType", "KitchenType",
-        "Elevator", "Parking", "InsideTheSite", "ItemStatus",
-        "UsingStatus", "TitleStatus", "EnergyRating", "subscription",
-        "listing_url",
-    ]:
-        out[col] = np.nan
+    # ── rooms ─────────────────────────────────────────────────
+    out["rooms"]       = pd.to_numeric(df["rooms"],       errors="coerce")
+    out["halls"]       = pd.to_numeric(df["halls"],       errors="coerce")
+    out["total_rooms"] = pd.to_numeric(df["total_rooms"], errors="coerce")
+
+    # ── floor info ────────────────────────────────────────────
+    out["floor"]          = pd.to_numeric(df["floor"],        errors="coerce")
+    out["floor_category"] = df["floor_category"].astype(str).str.strip().replace("nan", np.nan)
+    out["total_floors"]   = pd.to_numeric(df["total_floors"], errors="coerce")
+
+    # ── building characteristics ──────────────────────────────
+    out["building_age"]       = pd.to_numeric(df["building_age"], errors="coerce")
+    out["building_type"]      = df["building_type"].astype(str).str.strip().replace("nan", np.nan)
+    out["building_condition"] = df["building_condition"].astype(str).str.strip().replace("nan", np.nan)
+
+    # ── heating ───────────────────────────────────────────────
+    out["heating_type"] = df["heating_type"].astype(str).str.strip().replace("nan", np.nan)
+    out["fuel_type"]    = df["fuel_type"].astype(str).str.strip().replace("nan", np.nan)
+
+    # ── unit details ──────────────────────────────────────────
+    out["bathroom_count"] = pd.to_numeric(df["bathroom_count"], errors="coerce")
+    out["furnished"]      = df["furnished"].astype(str).str.strip().replace("nan", np.nan)
+    out["usage_status"]   = df["usage_status"].astype(str).str.strip().replace("nan", np.nan)
+
+    # ── complex / site ────────────────────────────────────────
+    out["is_in_complex"]  = clean_boolean_col(df["is_in_complex"])
+    out["complex_name"]   = df["complex_name"].astype(str).str.strip().replace("nan", np.nan)
+    out["maintenance_fee"] = pd.to_numeric(df["maintenance_fee"], errors="coerce")
+
+    # ── legal / financial ─────────────────────────────────────
+    out["orientation"]     = df["orientation"].astype(str).str.strip().replace("nan", np.nan)
+    out["credit_eligible"] = df["credit_eligible"].astype(str).str.strip().replace("nan", np.nan)
+    out["deed_status"]     = df["deed_status"].astype(str).str.strip().replace("nan", np.nan)
+    out["exchange"]        = df["exchange"].astype(str).str.strip().replace("nan", np.nan)
+
+    # ── dates ─────────────────────────────────────────────────
+    out["last_updated"] = pd.to_datetime(df["last_updated"], errors="coerce")
+    out["scraped_at"]   = pd.to_datetime(df["scraped_at"],   errors="coerce")
 
     # ── filter: remove junk prices and areas ──────────────────
     before = len(out)
@@ -208,11 +126,12 @@ def main():
     out = out.reset_index(drop=True)
 
     # ── report ────────────────────────────────────────────────
-    print(f"\nFinal shape   : {out.shape}")
-    print(f"With district : {out['district'].notna().sum()} / {len(out)}")
-    print(f"Price range   : {out['price'].min():,.0f} – {out['price'].max():,.0f} TL")
-    print(f"Median price  : {out['price'].median():,.0f} TL")
-    print(f"Median area   : {out['GrossSquareMeters'].median():.0f} m²")
+    print(f"\nFinal shape     : {out.shape}")
+    print(f"With district   : {out['district'].notna().sum()} / {len(out)}")
+    print(f"Price range     : {out['price'].min():,.0f} – {out['price'].max():,.0f} TL")
+    print(f"Median price    : {out['price'].median():,.0f} TL")
+    print(f"Median gross m² : {out['GrossSquareMeters'].median():.0f} m²")
+    print(f"Median net m²   : {out['NetSquareMeters'].median():.0f} m²")
     print(f"\nTop districts :")
     print(out["district"].value_counts().head(15).to_string())
 

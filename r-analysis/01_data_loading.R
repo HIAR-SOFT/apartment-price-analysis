@@ -10,8 +10,13 @@ library(dplyr)
 library(stringr)
 library(here)
 
-# ── 0. Locate raw CSV ─────────────────────────────────────────
-raw_file <- here("data", "raw", "22_5_2022_sahibinden_ev.csv")
+# ── 0. Locate CSV ─────────────────────────────────────────
+raw_file <- list.files(
+  here("data", "cleaned"),
+  pattern = "cleaned_listings.*\\.csv$",
+  full.names = TRUE
+)[1]
+
 
 if (!file.exists(raw_file)) {
   stop(
@@ -25,29 +30,13 @@ raw <- read_csv(raw_file, show_col_types = FALSE)
 cat("Raw shape:", nrow(raw), "x", ncol(raw), "\n")
 cat("Raw columns:", paste(names(raw), collapse = ", "), "\n\n")
 
-# ── 1. Rename for clarity ─────────────────────────────────────
-df <- raw %>%
-  rename(
-    row_id        = `Unnamed: 0`,
-    title         = title,
-    GrossSquareMeters = area,
-    NumberOfRooms = numberOfRooms,
-    price_raw     = price,
-    town_raw      = town,
-    district_raw  = district
-  )
+# use cleaned dataset
+df <- raw
 
-# ── 2. Parse price ────────────────────────────────────────────
-# Prices stored as "1.750.000" (Turkish thousands-dot notation)
-df <- df %>%
-  mutate(
-    price = as.numeric(str_replace_all(price_raw, "\\.", ""))
-  )
 
-cat("Price parse failures:", sum(is.na(df$price)), "\n")
 
-# ── 3. Parse room count ───────────────────────────────────────
-# Format: "3+1", "2+1", "Stüdyo", "4+2", etc.
+# parse room count ───────────────────────────────────────
+# Format: "3+1", "2+1", "Stüdyo", "4+2", ..
 # room_count = sum of all parts (e.g. 3+1 → 4)
 parse_rooms <- function(x) {
   x <- as.character(x)
@@ -66,23 +55,13 @@ df <- df %>%
 
 cat("Room count NA:", sum(is.na(df$room_count)), "\n")
 
-# ── 4. Extract sub-district from town_raw ─────────────────────
-# town_raw is neighbourhood text concatenated with mahalle name,
-# e.g. "ArnavutköyAnadolu Mah" or "GürpınarAdnan Kahveci Mah".
-# We extract the leading capitalised run as the sub-district.
-extract_sub_district <- function(town) {
-  if_else(
-    is.na(town),
-    NA_character_,
-    str_extract(town, "^[\\p{Lu}][^\\s]+(?:\\s[^\\s]+)*?(?=[\\p{Lu}][\\p{Ll}])")
-  )
-}
-
+# sub-district
 df <- df %>%
   mutate(
-    sub_district  = extract_sub_district(town_raw),
-    neighbourhood = town_raw
+    sub_district = neighbourhood
   )
+
+
 
 cat("Sub-district extracted:", sum(!is.na(df$sub_district)), "/", nrow(df), "\n")
 

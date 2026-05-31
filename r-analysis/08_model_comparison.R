@@ -15,7 +15,7 @@ if (!file.exists(lm_path) || !file.exists(rf_path)) {
 
 comparison <- bind_rows(readRDS(lm_path), readRDS(rf_path))
 
-cat("=== MODEL COMPARISON ===\n")
+cat("MODEL COMPARISON \n")
 print(comparison)
 
 long <- comparison %>%
@@ -41,8 +41,8 @@ dir.create(plot_dir, recursive = TRUE, showWarnings = FALSE)
 ggsave(file.path(plot_dir, "model_comparison.png"), p, width = 10, height = 5, dpi = 150)
 cat("Saved: visuals/regression_plots/model_comparison.png\n")
 
-cat("\n=== INTERPRETATION ===\n")
+cat("\n INTERPRETATION \n")
 cat("Best RMSE:", comparison$model[which.min(comparison$RMSE)], "\n")
 cat("Best R²  :", comparison$model[which.max(comparison$R2)],   "\n")
-cat("\n✓ Comparison done. Ready to launch Shiny app:\n")
+cat("\n Comparison done! Ready to launch Shiny app:\n")
 cat("  shiny::runApp('shiny-app')\n")

@@ -1,7 +1,6 @@
-# ============================================================
+
 # 03_descriptive_statistics.R
-# Descriptive statistics for the Istanbul sale-price dataset
-# ============================================================
+
 
 library(dplyr)
 library(tidyr)
@@ -23,7 +22,7 @@ describe <- function(x, label = "value") {
       kurtosis = NA_real_
     ))
   
-  # Pearson skewness and excess kurtosis
+  # excess skewness and kurtosis
   n    <- length(x)
   m    <- mean(x)
   s    <- sd(x)
@@ -62,10 +61,23 @@ net_area_stats <- describe(df$NetSquareMeters, "Net area (m²)")
 cat("\n=== NET AREA STATISTICS ===\n")
 print(net_area_stats, width = 120)
 
-# ── 4. Price per m² ───────────────────────────────────────────
-ppm2_stats <- describe(df$price_per_m2, "Price per m² (TL)")
-cat("\n=== PRICE PER M² ===\n")
+# -- 4. Price per m2 (NET-based -- primary metric) ------------
+# price_per_m2 = price / net_sqm — the economically correct basis.
+# Gross-based price/m² artificially deflates older inner-city districts
+# (Kagithane, Fatih, Beyoglu) by 30-45% vs new outer suburbs because
+# their large common areas inflate gross area far more than in modern
+# new-build districts.  This is the root cause of the district ranking
+# mismatch with market reality.
+ppm2_stats <- describe(df$price_per_m2, "Price per NET m2 (TL)")
+cat("\n=== PRICE PER NET M2 (primary metric) ===\n")
 print(ppm2_stats, width = 120)
+
+# Also report gross-based for reference
+if ("price_per_gross_m2" %in% names(df)) {
+  ppm2_gross_stats <- describe(df$price_per_gross_m2, "Price per GROSS m2 (TL)")
+  cat("\n=== PRICE PER GROSS M2 (reference only — do NOT use for district comparisons) ===\n")
+  print(ppm2_gross_stats, width = 120)
+}
 
 # ── 5. Room count distribution ────────────────────────────────
 # rooms is now a plain integer column — no string parsing needed

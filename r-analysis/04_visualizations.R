@@ -104,8 +104,8 @@ if (has_col("price_per_m2")) {
     geom_histogram(bins = 50, fill = "#009688", color = "white", linewidth = 0.2) +
     scale_x_continuous(labels = label_number(suffix = "K")) +
     labs(
-      title = "Price per m² Distribution",
-      x = "TL per m² (thousands)", y = "Count"
+      title = "Price per Net m\u00b2 Distribution (Usable Area)",
+      x = "TL per net m\u00b2 (thousands)", y = "Count"
     ) + THEME
   save_plot(p5, "histograms/price_per_m2_histogram.png")
 }
@@ -211,7 +211,7 @@ if (has_col("sub_district") && has_col("price")) {
         scale_y_continuous(labels = label_number(suffix = "K")) +
         labs(
           title = "Price per m² by Sub-District (Top 15)",
-          x = NULL, y = "TL per m² (thousands)"
+          x = NULL, y = "TL per net m\u00b2 (thousands)"
         ) + THEME
       save_plot(p8, "boxplots/price_per_m2_by_district.png", w = 10, h = 8)
     }

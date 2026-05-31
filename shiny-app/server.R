@@ -223,7 +223,7 @@ server <- function(input, output, session) {
     val <- if (nrow(s) > 0) mean(s$price_per_m2, na.rm = TRUE) else NA
     div(div(class = "stat-value",
             if (is.na(val)) "-" else format(round(val), big.mark = ",")),
-        div(class = "stat-label", "Avg. TL / m2"))
+        div(class = "stat-label", "Avg. TL / net m2"))
   })
   
   output$similar_distribution <- renderPlotly({
@@ -326,7 +326,7 @@ server <- function(input, output, session) {
     d <- df() %>% filter(!is.na(price_per_m2))
     plot_ly(d, x = ~price_per_m2, type = "histogram",
             marker = list(color = "#FF9800"), nbinsx = 50) %>%
-      layout(xaxis = list(title = "TL / m2", tickformat = ",.0f"),
+      layout(xaxis = list(title = "TL / net m2", tickformat = ",.0f"),
              yaxis = list(title = "Count"))
   })
   
@@ -389,7 +389,7 @@ server <- function(input, output, session) {
             text         = ~paste0(round(median_price / 1e6, 1), "M"),
             textposition = "outside") %>%
       layout(
-        title  = list(text = "Median Sale Price by District (Top 25)",
+        title  = list(text = "Median Sale Price by District (Top 25) — price/m\u00b2 based on NET usable area",
                       font = list(size = 14)),
         xaxis  = list(title = "Median Price (TL)", tickformat = ",.0f"),
         yaxis  = list(title = ""),
@@ -410,7 +410,7 @@ server <- function(input, output, session) {
         Listings       = count,
         "Avg Price"    = avg_price,
         "Median Price" = median_price,
-        "Avg TL/m2"   = avg_ppm2,
+        "Avg TL/net m2" = avg_ppm2,
         "Avg m2"       = avg_area
       ) %>%
       datatable(

@@ -15,10 +15,9 @@ cat("HYPOTHESIS TESTING — Istanbul Apartment Prices\n")
 cat("=================================================================\n\n")
 cat("Sale listings available:", nrow(df_s), "\n\n")
 
-# ── TEST 1: Heating type vs price (ANOVA) ────────────────────
-# Replaces old KitchenType test — heating_type is the equivalent
-# categorical building-service variable in the new dataset.
-cat("── TEST 1: Heating Type vs Price (ANOVA) ───────────────────────\n")
+# Heating type vs price 
+
+cat("── TEST 1: Heating type vs price ───────────────────────\n")
 
 if (!"heating_type" %in% names(df_s)) {
   cat("[SKIP] heating_type column not found.\n\n")
@@ -53,8 +52,8 @@ if (!"heating_type" %in% names(df_s)) {
   }
 }
 
-# ── TEST 2: District vs price (ANOVA) ────────────────────────
-cat("── TEST 2: District vs Price (ANOVA) ───────────────────────────\n")
+#  District vs price 
+cat("── TEST 2: District vs Price ───────────────────────────\n")
 
 if (!"district" %in% names(df_s)) {
   cat("[SKIP] district column not found.\n\n")
@@ -135,7 +134,7 @@ if (length(log_p) < 3) {
 # TEST 5: Building condition vs price ─
 # Replaces old InsideTheSite test — building_condition (New vs
 # Second-hand) is a clean binary variable in the new dataset.
-cat("── TEST 5: New vs Second-hand Buildings (Welch t-test) ─────────\n")
+cat("TEST 5: New vs Second-hand Buildings (Welch t-test) \n")
 
 if (!"building_condition" %in% names(df_s)) {
   cat("[SKIP] building_condition not found.\n\n")
